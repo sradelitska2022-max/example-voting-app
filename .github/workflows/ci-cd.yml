@@ -4,55 +4,38 @@ on:
   push:
     branches:
       - main
+
+env:
+  ACR_LOGIN_SERVER: radelitska.azurecr.io  # <- твій ACR login server
+
 jobs:
-  build-and-deploy:
+  build-and-push:
     runs-on: ubuntu-latest
-
-    env:
-      ACR_LOGIN_SERVER: <твій-acr>.azurecr.io  # заміни на свій ACR login server
-      VM_USER: azureuser
-      VM_HOST: <тут-IP-твоєї-VM>               # наприклад 20.50.30.40
-      SSH_KEY: ${{ secrets.SSH_KEY }}          # приватний ключ VM
-      APP_PATH: /home/azureuser/voting-app
-
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v3
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-    - name: Log in to ACR
-      uses: azure/docker-login@v1
-      with:
-        login-server: ${{ env.ACR_LOGIN_SERVER }}
-        username: ${{ secrets.ACR_USERNAME }}
-        password: ${{ secrets.ACR_PASSWORD }}
+      - name: Login to ACR
+        uses: azure/docker-login@v1
+        with:
+          login-server: ${{ env.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
 
-    - name: Build and push Docker images
-      run: |
-        for service in vote result worker; do
-          docker build -t $ACR_LOGIN_SERVER/$service:latest ./src/$service
-          docker push $ACR_LOGIN_SERVER/$service:latest
-        done
+      # Build + push vote
+      - name: Build and push vote
+        run: |
+          docker build -t $ACR_LOGIN_SERVER/vote:latest ./vote
+          docker push $ACR_LOGIN_SERVER/vote:latest
 
-    - name: Prepare docker-compose for VM
-      run: |
-        cp docker-compose.yml docker-compose.vm.yml
-        for service in vote result worker; do
-          yq -i ".services.$service.build = null" docker-compose.vm.yml
-          yq -i ".services.$service.image = \"$ACR_LOGIN_SERVER/$service:latest\"" docker-compose.vm.yml
-        done
+      # Build + push result
+      - name: Build and push result
+        run: |
+          docker build -t $ACR_LOGIN_SERVER/result:latest ./result
+          docker push $ACR_LOGIN_SERVER/result:latest
 
-    - name: Deploy to VM via SSH
-      uses: appleboy/ssh-action@v0.1.7
-      with:
-        host: ${{ env.VM_HOST }}
-        username: ${{ env.VM_USER }}
-        key: ${{ env.SSH_KEY }}
-        port: 22
-        script: |
-          mkdir -p $APP_PATH
-          cat > $APP_PATH/docker-compose.yml <<'EOF'
-          $(cat docker-compose.vm.yml)
-          EOF
-          cd $APP_PATH
-          docker compose pull
-          docker compose up -d --remove-orphans
+      # Build + push worker
+      - name: Build and push worker
+        run: |
+          docker build -t $ACR_LOGIN_SERVER/worker:latest ./worker
+          docker push $ACR_LOGIN_SERVER/worker:latest
