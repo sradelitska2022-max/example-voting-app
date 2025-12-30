@@ -1,0 +1,59 @@
+name: CI/CD Voting App
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      ACR_LOGIN_SERVER: <acr-login-server>  # твій ACR
+      VM_USER: azureuser
+      VM_HOST: <vm-public-ip>               # IP твоєї VM
+      SSH_KEY: ${{ secrets.SSH_KEY }}       # приватний ключ VM
+      APP_PATH: /home/azureuser/voting-app  # де на VM буде docker-compose
+
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v3
+
+    - name: Log in to ACR
+      uses: azure/docker-login@v1
+      with:
+        login-server: ${{ env.ACR_LOGIN_SERVER }}
+        username: ${{ secrets.ACR_USERNAME }}
+        password: ${{ secrets.ACR_PASSWORD }}
+
+    - name: Build and push images
+      run: |
+        for service in vote result worker; do
+          docker build -t $ACR_LOGIN_SERVER/$service:latest ./src/$service
+          docker push $ACR_LOGIN_SERVER/$service:latest
+        done
+
+    - name: Prepare docker-compose for VM
+      run: |
+        cp docker-compose.yml docker-compose.vm.yml
+        for service in vote result worker; do
+          yq -i ".services.$service.build = null" docker-compose.vm.yml
+          yq -i ".services.$service.image = \"$ACR_LOGIN_SERVER/$service:latest\"" docker-compose.vm.yml
+        done
+
+    - name: Deploy to VM via SSH
+      uses: appleboy/ssh-action@v0.1.7
+      with:
+        host: ${{ env.VM_HOST }}
+        username: ${{ env.VM_USER }}
+        key: ${{ env.SSH_KEY }}
+        port: 22
+        script: |
+          mkdir -p $APP_PATH
+          cat > $APP_PATH/docker-compose.yml <<'EOF'
+          $(cat docker-compose.vm.yml)
+          EOF
+          cd $APP_PATH
+          docker compose pull
+          docker compose up -d --remove-orphans
